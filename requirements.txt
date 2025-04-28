@@ -1,0 +1,7 @@
+fastmcp
+selenium==4.18.1
+requests==2.31.0
+pandas==2.2.3
+httpx
+python-dotenv
+webdriver-manager
