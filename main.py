@@ -209,6 +209,100 @@ def run_query(query_id: int) -> List[Dict[str, Any]]:
         raise last_error
     return []
 
+@mcp.tool()
+def get_top_5_chain_by_number_of_wallet() -> List[Dict[str, Any]]:
+    """
+    Get the latest results for a specific query ID from Dune Analytics.
+    
+    Args:
+        query_id (int): The ID of the query to fetch results for
+        
+    Returns:
+        List[Dict[str, Any]]: Query results as a list of dictionaries
+        
+    Raises:
+        QueryExecutionError: If there is an error executing the query
+        NoDataError: If no data is returned from the query
+    """
+    query_id = 5055813
+    try:
+        url = f"{BASE_URL}/query/{query_id}/results"
+        with httpx.Client(timeout=QUERY_TIMEOUT) as client:
+            response = client.get(url, headers=HEADERS, timeout=300)
+            if response.status_code == 404:
+                run_query(query_id)
+            data = response.json()
+        
+        result_data = data.get("result", {}).get("rows", [])
+        execution_started_at_str = data.get("execution_started_at")
+        
+        if not execution_started_at_str:
+            print("No execution timestamp found, running new query...")
+            return run_query(query_id)
+            
+        print(f"Execution started at: {execution_started_at_str}")
+        execution_started_at = datetime.strptime(execution_started_at_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+        now = datetime.utcnow()
+        delta = now - execution_started_at
+        
+        if not result_data or delta >= timedelta(hours=STALE_DATA_THRESHOLD):
+            print("Data is stale or empty, running new query...")
+            return run_query(query_id)
+
+        return result_data
+        
+    except httpx.HTTPError as e:
+        raise QueryExecutionError(f"HTTP error fetching query results: {str(e)}")
+    except Exception as e:
+        raise QueryExecutionError(f"Error processing query results: {str(e)}")
+    
+@mcp.tool()
+def get_top_5_chain_by_trading_volume() -> List[Dict[str, Any]]:
+    """
+    Get the latest results for a specific query ID from Dune Analytics.
+    
+    Args:
+        query_id (int): The ID of the query to fetch results for
+        
+    Returns:
+        List[Dict[str, Any]]: Query results as a list of dictionaries
+        
+    Raises:
+        QueryExecutionError: If there is an error executing the query
+        NoDataError: If no data is returned from the query
+    """
+    query_id = 5055798
+    try:
+        url = f"{BASE_URL}/query/{query_id}/results"
+        with httpx.Client(timeout=QUERY_TIMEOUT) as client:
+            response = client.get(url, headers=HEADERS, timeout=300)
+            if response.status_code == 404:
+                run_query(query_id)
+            data = response.json()
+        
+        result_data = data.get("result", {}).get("rows", [])
+        execution_started_at_str = data.get("execution_started_at")
+        
+        if not execution_started_at_str:
+            print("No execution timestamp found, running new query...")
+            return run_query(query_id)
+            
+        print(f"Execution started at: {execution_started_at_str}")
+        execution_started_at = datetime.strptime(execution_started_at_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+        now = datetime.utcnow()
+        delta = now - execution_started_at
+        
+        if not result_data or delta >= timedelta(hours=STALE_DATA_THRESHOLD):
+            print("Data is stale or empty, running new query...")
+            return run_query(query_id)
+
+        return result_data
+        
+    except httpx.HTTPError as e:
+        raise QueryExecutionError(f"HTTP error fetching query results: {str(e)}")
+    except Exception as e:
+        raise QueryExecutionError(f"Error processing query results: {str(e)}")
+
 def main():
     """Test the functionality of the tools."""
     try:
