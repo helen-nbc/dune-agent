@@ -46,7 +46,7 @@ class SeleniumUtils:
     def get_queries_ids(self, input: str):
       """Extract query links from Dune Discover."""
       base_url = "https://dune.com/discover/content/relevant"
-      input = {"q": input, "resource-type": "queries"}
+      input = {"q": input, "resource-type": "queries", "publicness": "public", "sort-by": "relevance"}
       url = generate_search_url(base_url, input)
 
       if not self.driver:
