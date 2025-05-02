@@ -5,10 +5,10 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from utils.selenium_utils import SeleniumUtils
+from utils.run_query import run_query
 
 from utils.config import (
     DUNE_API_KEY, BASE_URL, HEADERS,
-    MAX_RETRIES, POLL_INTERVAL, MAX_POLL_ATTEMPTS,
     QUERY_TIMEOUT, STALE_DATA_THRESHOLD,
     ERROR_MESSAGES
 )
@@ -17,7 +17,7 @@ from utils.exceptions import (
     QueryExecutionError,
     QueryTimeoutError,
     NoDataError,
-    SeleniumError
+    SeleniumError,
 )
 
 # Load environment variables
@@ -75,12 +75,31 @@ def get_query_ids(query: str) -> List[int]:
 
 
 @mcp.tool()
-def get_latest_result(query_id: int) -> List[Dict[str, Any]]:
+def get_latest_result_by_query_id(
+    query_id: int,
+    columns: Optional[str] = None,
+    filters: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+    sample_count: Optional[int] = None,
+    allow_partial_results: bool = False,
+    ignore_max_datapoints_per_request: bool = False
+) -> List[Dict[str, Any]]:
     """
-    Get the latest results for a specific query ID from Dune Analytics.
+    Get the latest results for a specific query ID from Dune Analytics with advanced filtering and pagination options.
+    This function automatically handles pagination to fetch all results.
     
     Args:
         query_id (int): The ID of the query to fetch results for
+        columns (str, optional): Comma-separated list of column names to return. If omitted, all columns are included.
+        filters (str, optional): Expression to filter out rows from the results (similar to SQL WHERE clause).
+        sort_by (str, optional): Expression to define the order of results (similar to SQL ORDER BY clause).
+        limit (int, optional): Maximum number of rows to return per page. Defaults to 1000 if not specified.
+        offset (int, optional): Starting row number for pagination (0-based). Usually starts at 0.
+        sample_count (int, optional): Number of rows to return by random sampling.
+        allow_partial_results (bool): Whether to allow returning partial results if query result is too large.
+        ignore_max_datapoints_per_request (bool): Whether to ignore the default 250,000 datapoints limit.
         
     Returns:
         List[Dict[str, Any]]: Query results as a list of dictionaries
@@ -90,225 +109,181 @@ def get_latest_result(query_id: int) -> List[Dict[str, Any]]:
         NoDataError: If no data is returned from the query
     """
     try:
-        url = f"{BASE_URL}/query/{query_id}/results"
-        with httpx.Client(timeout=QUERY_TIMEOUT) as client:
-            response = client.get(url, headers=HEADERS, timeout=300)
-            if response.status_code == 404:
-                run_query(query_id)
-            data = response.json()
-        
-        result_data = data.get("result", {}).get("rows", [])
-        execution_started_at_str = data.get("execution_started_at")
-        
-        if not execution_started_at_str:
-            print("No execution timestamp found, running new query...")
-            return run_query(query_id)
+        # Set default limit if not specified
+        if limit is None:
+            limit = 100  # Default page size
             
-        print(f"Execution started at: {execution_started_at_str}")
-        execution_started_at = datetime.strptime(execution_started_at_str, "%Y-%m-%dT%H:%M:%S.%fZ")
-        now = datetime.utcnow()
-        delta = now - execution_started_at
+        # Initialize offset if not specified
+        if offset is None:
+            offset = 0
+            
+        all_results = []
+        has_more_results = True
         
-        if not result_data or delta >= timedelta(hours=STALE_DATA_THRESHOLD):
-            print("Data is stale or empty, running new query...")
-            return run_query(query_id)
+        while has_more_results:
+            # Build query parameters
+            params = {
+                'limit': limit,
+                'offset': offset
+            }
+            if columns:
+                params['columns'] = columns
+            if filters:
+                params['filters'] = filters
+            if sort_by:
+                params['sort_by'] = sort_by
+            if sample_count is not None:
+                params['sample_count'] = sample_count
+            if allow_partial_results:
+                params['allow_partial_results'] = 'true'
+            if ignore_max_datapoints_per_request:
+                params['ignore_max_datapoints_per_request'] = 'true'
 
-        return result_data
-        
-    except httpx.HTTPError as e:
-        raise QueryExecutionError(f"HTTP error fetching query results: {str(e)}")
-    except Exception as e:
-        raise QueryExecutionError(f"Error processing query results: {str(e)}")
-
-@mcp.tool()
-def run_query(query_id: int) -> List[Dict[str, Any]]:
-    """
-    Run a query by ID and return results from Dune Analytics.
-    
-    Args:
-        query_id (int): The ID of the query to run
-        
-    Returns:
-        List[Dict[str, Any]]: Query results as a list of dictionaries
-        
-    Raises:
-        QueryExecutionError: If there is an error executing the query
-        QueryTimeoutError: If the query execution times out
-        NoDataError: If no data is returned from the query
-    """
-    retry_count = 0
-    last_error = None
-    
-    while retry_count < MAX_RETRIES:
-        try:
-            # Execute query
-            url = f"{BASE_URL}/query/execute/{query_id}"
+            url = f"{BASE_URL}/query/{query_id}/results"
             with httpx.Client(timeout=QUERY_TIMEOUT) as client:
-                execute_response = client.post(url, headers=HEADERS)
-                execute_response.raise_for_status()
-                execution_data = execute_response.json()
-                execution_id = execution_data.get("execution_id")
-                
-                if not execution_id:
-                    raise QueryExecutionError(ERROR_MESSAGES["no_execution_id"])
-
-                # Poll for status
-                status_url = f"{BASE_URL}/execution/{execution_id}/status"
-                poll_count = 0
-                
-                while poll_count < MAX_POLL_ATTEMPTS:
-                    status_response = client.get(status_url, headers=HEADERS)
-                    status_response.raise_for_status()
-                    status_data = status_response.json()
-                    state = status_data.get("state")
-                    
-                    if state == "QUERY_STATE_COMPLETED":
-                        # Fetch results
-                        results_url = f"{BASE_URL}/execution/{execution_id}/results"
-                        results_response = client.get(results_url, headers=HEADERS)
-                        results_response.raise_for_status()
-                        results_data = results_response.json()
-                        
-                        result_rows = results_data.get("result", {}).get("rows", [])
-                        if result_rows:
-                            return result_rows
-                        raise NoDataError(ERROR_MESSAGES["no_data"])
-                        
-                    elif state in ["QUERY_STATE_FAILED", "QUERY_STATE_CANCELLED", "QUERY_STATE_ERROR"]:
-                        raise QueryExecutionError(ERROR_MESSAGES["execution_failed"].format(state))
-                        
-                    elif state in ["QUERY_STATE_EXECUTING", "QUERY_STATE_PENDING"]:
-                        time.sleep(POLL_INTERVAL)
-                        poll_count += 1
-                    else:
-                        raise QueryExecutionError(ERROR_MESSAGES["unknown_state"].format(state))
-
-                if poll_count >= MAX_POLL_ATTEMPTS:
-                    raise QueryTimeoutError(ERROR_MESSAGES["timeout"])
-
-        except (QueryExecutionError, QueryTimeoutError, NoDataError) as e:
-            last_error = e
-            retry_count += 1
-            if retry_count < MAX_RETRIES:
-                print(f"Retrying query execution (attempt {retry_count + 1}/{MAX_RETRIES})")
-                time.sleep(POLL_INTERVAL)
-            continue
-                
-        except httpx.HTTPError as e:
-            last_error = QueryExecutionError(f"HTTP error running query: {str(e)}")
-            retry_count += 1
-            if retry_count < MAX_RETRIES:
-                print(f"Retrying query execution (attempt {retry_count + 1}/{MAX_RETRIES})")
-                time.sleep(POLL_INTERVAL)
-            continue
+                response = client.get(url, headers=HEADERS, params=params, timeout=300)
+                if response.status_code == 404:
+                    run_query(query_id)
+                    continue
+                data = response.json()
             
-        except Exception as e:
-            raise QueryExecutionError(f"Error processing query: {str(e)}")
+            # Get the current page of results
+            result_data = data.get("result", {}).get("rows", [])
+            execution_started_at_str = data.get("execution_started_at")
             
-    if last_error:
-        raise last_error
-    return []
-
-@mcp.tool()
-def get_top_5_chain_by_number_of_wallet() -> List[Dict[str, Any]]:
-    """
-    Get the latest results for a specific query ID from Dune Analytics.
-    
-    Args:
-        query_id (int): The ID of the query to fetch results for
-        
-    Returns:
-        List[Dict[str, Any]]: Query results as a list of dictionaries
-        
-    Raises:
-        QueryExecutionError: If there is an error executing the query
-        NoDataError: If no data is returned from the query
-    """
-    query_id = 5055813
-    try:
-        url = f"{BASE_URL}/query/{query_id}/results"
-        with httpx.Client(timeout=QUERY_TIMEOUT) as client:
-            response = client.get(url, headers=HEADERS, timeout=300)
-            if response.status_code == 404:
-                run_query(query_id)
-            data = response.json()
-        
-        result_data = data.get("result", {}).get("rows", [])
-        execution_started_at_str = data.get("execution_started_at")
-        
-        if not execution_started_at_str:
-            print("No execution timestamp found, running new query...")
-            return run_query(query_id)
+            if not execution_started_at_str:
+                print("No execution timestamp found, running new query...")
+                return run_query(query_id)
+                
+            print(f"Execution started at: {execution_started_at_str}")
+            execution_started_at = datetime.strptime(execution_started_at_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+            now = datetime.utcnow()
+            delta = now - execution_started_at
             
-        print(f"Execution started at: {execution_started_at_str}")
-        execution_started_at = datetime.strptime(execution_started_at_str, "%Y-%m-%dT%H:%M:%S.%fZ")
-        now = datetime.utcnow()
-        delta = now - execution_started_at
-        
-        if not result_data or delta >= timedelta(hours=STALE_DATA_THRESHOLD):
-            print("Data is stale or empty, running new query...")
-            return run_query(query_id)
+            if not result_data or delta >= timedelta(hours=STALE_DATA_THRESHOLD):
+                print("Data is stale or empty, running new query...")
+                return run_query(query_id)
 
-        return result_data
+            # Add current page results to all results
+            all_results.extend(result_data)
+            
+            # Check if there are more results
+            next_offset = data.get("next_offset")
+            if next_offset is None or len(result_data) < limit:
+                has_more_results = False
+            else:
+                offset = next_offset
+                print(f"Fetching next page of results (offset: {offset})...")
+
+        return all_results
         
     except httpx.HTTPError as e:
         raise QueryExecutionError(f"HTTP error fetching query results: {str(e)}")
     except Exception as e:
         raise QueryExecutionError(f"Error processing query results: {str(e)}")
-    
-@mcp.tool()
-def get_top_5_chain_by_trading_volume() -> List[Dict[str, Any]]:
-    """
-    Get the latest results for a specific query ID from Dune Analytics.
-    
-    Args:
-        query_id (int): The ID of the query to fetch results for
-        
-    Returns:
-        List[Dict[str, Any]]: Query results as a list of dictionaries
-        
-    Raises:
-        QueryExecutionError: If there is an error executing the query
-        NoDataError: If no data is returned from the query
-    """
-    query_id = 5055798
-    try:
-        url = f"{BASE_URL}/query/{query_id}/results"
-        with httpx.Client(timeout=QUERY_TIMEOUT) as client:
-            response = client.get(url, headers=HEADERS, timeout=300)
-            if response.status_code == 404:
-                run_query(query_id)
-            data = response.json()
-        
-        result_data = data.get("result", {}).get("rows", [])
-        execution_started_at_str = data.get("execution_started_at")
-        
-        if not execution_started_at_str:
-            print("No execution timestamp found, running new query...")
-            return run_query(query_id)
-            
-        print(f"Execution started at: {execution_started_at_str}")
-        execution_started_at = datetime.strptime(execution_started_at_str, "%Y-%m-%dT%H:%M:%S.%fZ")
-        now = datetime.utcnow()
-        delta = now - execution_started_at
-        
-        if not result_data or delta >= timedelta(hours=STALE_DATA_THRESHOLD):
-            print("Data is stale or empty, running new query...")
-            return run_query(query_id)
 
-        return result_data
+
+
+# @mcp.tool()
+# def get_top_5_chain_by_number_of_wallet() -> List[Dict[str, Any]]:
+#     """
+#     Get the latest results for a specific query ID from Dune Analytics.
+    
+#     Args:
+#         query_id (int): The ID of the query to fetch results for
         
-    except httpx.HTTPError as e:
-        raise QueryExecutionError(f"HTTP error fetching query results: {str(e)}")
-    except Exception as e:
-        raise QueryExecutionError(f"Error processing query results: {str(e)}")
+#     Returns:
+#         List[Dict[str, Any]]: Query results as a list of dictionaries
+        
+#     Raises:
+#         QueryExecutionError: If there is an error executing the query
+#         NoDataError: If no data is returned from the query
+#     """
+#     query_id = 5055813
+#     try:
+#         url = f"{BASE_URL}/query/{query_id}/results"
+#         with httpx.Client(timeout=QUERY_TIMEOUT) as client:
+#             response = client.get(url, headers=HEADERS, timeout=300)
+#             if response.status_code == 404:
+#                 run_query(query_id)
+#             data = response.json()
+        
+#         result_data = data.get("result", {}).get("rows", [])
+#         execution_started_at_str = data.get("execution_started_at")
+        
+#         if not execution_started_at_str:
+#             print("No execution timestamp found, running new query...")
+#             return run_query(query_id)
+            
+#         print(f"Execution started at: {execution_started_at_str}")
+#         execution_started_at = datetime.strptime(execution_started_at_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+#         now = datetime.utcnow()
+#         delta = now - execution_started_at
+        
+#         if not result_data or delta >= timedelta(hours=STALE_DATA_THRESHOLD):
+#             print("Data is stale or empty, running new query...")
+#             return run_query(query_id)
+
+#         return result_data
+        
+#     except httpx.HTTPError as e:
+#         raise QueryExecutionError(f"HTTP error fetching query results: {str(e)}")
+#     except Exception as e:
+#         raise QueryExecutionError(f"Error processing query results: {str(e)}")
+    
+# @mcp.tool()
+# def get_top_5_chain_by_trading_volume() -> List[Dict[str, Any]]:
+#     """
+#     Get the latest results for a specific query ID from Dune Analytics.
+    
+#     Args:
+#         query_id (int): The ID of the query to fetch results for
+        
+#     Returns:
+#         List[Dict[str, Any]]: Query results as a list of dictionaries
+        
+#     Raises:
+#         QueryExecutionError: If there is an error executing the query
+#         NoDataError: If no data is returned from the query
+#     """
+#     query_id = 5055798
+#     try:
+#         url = f"{BASE_URL}/query/{query_id}/results"
+#         with httpx.Client(timeout=QUERY_TIMEOUT) as client:
+#             response = client.get(url, headers=HEADERS, timeout=300)
+#             if response.status_code == 404:
+#                 run_query(query_id)
+#             data = response.json()
+        
+#         result_data = data.get("result", {}).get("rows", [])
+#         execution_started_at_str = data.get("execution_started_at")
+        
+#         if not execution_started_at_str:
+#             print("No execution timestamp found, running new query...")
+#             return run_query(query_id)
+            
+#         print(f"Execution started at: {execution_started_at_str}")
+#         execution_started_at = datetime.strptime(execution_started_at_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+#         now = datetime.utcnow()
+#         delta = now - execution_started_at
+        
+#         if not result_data or delta >= timedelta(hours=STALE_DATA_THRESHOLD):
+#             print("Data is stale or empty, running new query...")
+#             return run_query(query_id)
+
+#         return result_data
+        
+#     except httpx.HTTPError as e:
+#         raise QueryExecutionError(f"HTTP error fetching query results: {str(e)}")
+#     except Exception as e:
+#         raise QueryExecutionError(f"Error processing query results: {str(e)}")
 
 def main():
     """Test the functionality of the tools."""
     try:
         # Test query execution with error handling
         test_query_id = get_query_ids("Eternal AI Daily Inferences By Chain")
-        results = get_latest_result(test_query_id)
+        results = get_latest_result_by_query_id(test_query_id)
         print(f"Got {len(results)} results")
         
     except DuneAPIKeyError as e:
