@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Dune Analytics API Configuration
-DUNE_API_KEY = os.getenv("DUNE_API_KEY")
+DUNE_API_KEY = os.getenv("DUNE_API_KEY","123")
 BASE_URL = "https://api.dune.com/api/v1"
 HEADERS = {"X-Dune-API-Key": DUNE_API_KEY}
 

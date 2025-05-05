@@ -33,8 +33,8 @@ VALID_CHAINS = ["ethereum", "arbitrum", "optimism", "polygon", "base", "bnb", "a
 
 
 # Validate API key
-if not DUNE_API_KEY:
-    raise DuneAPIKeyError(ERROR_MESSAGES["no_api_key"])
+# if not DUNE_API_KEY:
+#     raise DuneAPIKeyError(ERROR_MESSAGES["no_api_key"])
 
 # write a function and register it as a mcp tool using the @mcp.tool() decorator
 @mcp.tool()
