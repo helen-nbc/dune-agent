@@ -30,6 +30,8 @@ mcp = FastMCP()
 # Valid chain identifiers for the trending contracts API
 VALID_CHAINS = ["ethereum", "arbitrum", "optimism", "polygon", "base", "bnb", "avalanche"]
 
+
+
 # Validate API key
 if not DUNE_API_KEY:
     raise DuneAPIKeyError(ERROR_MESSAGES["no_api_key"])
@@ -466,40 +468,66 @@ def compare_trending_contracts(
     return result
 
 # memecoins
+
+# List of valid columns (based on provided column list)
+VALID_MEME_COIN_COLUMNS = [
+    "word_raw", "related_symbol", "token_contract_address", "blockchain", "deployed_days_ago",
+    "social_score", "financial_score", "meme_category", "casters", "casters_wow",
+    "percent_recipient_casters", "percent_recipient_wow", "recipient_casters",
+    "recipient_casters_wow", "casts", "casts_wow", "channels", "channels_wow",
+    "activity_level", "activity_wow", "total_supply", "fdv", "median_price",
+    "day_pnl", "week_pnl", "month_pnl", "liquidity_usd", "liquidity_wow",
+    "rolling_one_months_trades", "transfers_one_month", "total_volume_week",
+    "total_volume_wow", "buy_volume_week", "buy_volume_wow", "sell_volume_week",
+    "sell_volume_wow"
+]
 @mcp.tool()
 def get_farcaster_memecoins(
     limit: int = 5,
     filter_clause: str = None,
     sort_by: str = "social_score desc",
-    include_raw_response: bool = False
 ) -> Dict[str, Any]:
     """
-    Get trending memecoin data from Farcaster.
+    Fetch trending memecoin data from the Farcaster Dune API.
     
     Args:
-        limit (int, optional): Number of memecoins to retrieve, maximum 100. Default is 5.
-        filter_clause (str, optional): Filter expression, similar to SQL WHERE clause. Example: "liquidity_usd > 100000".
-        sort_by (str, optional): Field to sort results by, default is "social_score desc". 
-            Common fields: social_score, financial_score, liquidity_usd, total_volume_week, casters, fdv, week_pnl
-        include_raw_response (bool, optional): If True, returns raw API response. Default is False.
+        limit (int, optional): Number of memecoins to retrieve, max 100. Defaults to 5.
+        filter_clause (str, optional): Filter expression, similar to SQL WHERE clause.
+            Example: "liquidity_usd > 100000".
+        sort_by (str, optional): Field to sort results, defaults to "social_score desc".
+            Common fields: social_score, financial_score, liquidity_usd, total_volume_week,
+            casters, fdv, week_pnl.
+        include_raw_response (bool, optional): If True, includes raw API response. Defaults to False.
         
     Returns:
-        Dict[str, Any]: Structured result with information about trending memecoins
+        Dict[str, Any]: Structured result with trending memecoin information.
         
     Raises:
-        QueryExecutionError: If there is an error executing the query
+        QueryExecutionError: If there’s an error during API call or invalid parameters.
     """
     try:
-        url = f"{BASE_URL}/api/v1/farcaster/trends/memecoins"
-        params = {
-            "limit": min(limit, 100)  # Maximum limit of 100 according to documentation
-        }
+        # Validate limit
+        if limit < 1 or limit > 100:
+            raise QueryExecutionError("Limit must be between 1 and 100")
         
-        # Add optional parameters if provided
-        if filter_clause:
-            params["filter"] = filter_clause
+        # Validate sort_by
         if sort_by:
-            params["sort"] = sort_by
+            sort_field = sort_by.split()[0] if " " in sort_by else sort_by
+            if sort_field not in VALID_MEME_COIN_COLUMNS:
+                raise QueryExecutionError(f"Invalid sort_by field: {sort_field}. Must be one of {VALID_MEME_COIN_COLUMNS}")
+        
+        # Validate filter_clause
+        if filter_clause:
+            used_columns = [col for col in VALID_MEME_COIN_COLUMNS if col in filter_clause]
+            if not used_columns:
+                raise QueryExecutionError(f"Filter clause must reference valid columns: {VALID_MEME_COIN_COLUMNS}")
+
+        url = f"{BASE_URL}/farcaster/trends/memecoins"
+        params = {"limit": min(limit, 100)}
+        if filter_clause:
+            params["filters"] = filter_clause
+        if sort_by:
+            params["sort_by"] = sort_by
         
         print(f"Fetching memecoins from: {url}")
         print(f"With params: {params}")
@@ -513,38 +541,75 @@ def get_farcaster_memecoins(
         rows = data.get("result", {}).get("rows", [])
         metadata = data.get("result", {}).get("metadata", {})
         
+        # Check if filter is being respected (for numeric filters)
+        if filter_clause and ">" in filter_clause:
+            try:
+                column, threshold = filter_clause.split(">")
+                column = column.strip()
+                threshold = float(threshold.strip())  # Support float for fields like median_price
+                if column in VALID_MEME_COIN_COLUMNS:
+                    for row in rows:
+                        value = row.get(column, 0)
+                        if value <= threshold:
+                            print(f"Warning: Found {column}={value} which does not satisfy filter '{filter_clause}'")
+            except (IndexError, ValueError):
+                print("Warning: Could not parse filter threshold for validation")
+        
         # Format results
         formatted_coins = []
         for coin in rows:
             formatted_coin = {
                 "name": coin.get("word_raw", "Unknown"),
-                "symbol": coin.get("related_symbol", None),
+                "related_symbol": coin.get("related_symbol", None),
+                "contract_address": coin.get("token_contract_address", None),
                 "blockchain": coin.get("blockchain", "unknown"),
-                "category": coin.get("meme_category", "unknown"),
+                "deployed_days_ago": coin.get("deployed_days_ago", 0),
                 "social_score": coin.get("social_score", 0),
                 "financial_score": coin.get("financial_score", 0),
+                "meme_category": coin.get("meme_category", "unknown"),
                 "casters": coin.get("casters", 0),
+                "casters_wow": coin.get("casters_wow", 0),
+                "percent_recipient_casters": coin.get("percent_recipient_casters", 0),
+                "percent_recipient_wow": coin.get("percent_recipient_wow", 0),
+                "recipient_casters": coin.get("recipient_casters", 0),
+                "recipient_casters_wow": coin.get("recipient_casters_wow", 0),
                 "casts": coin.get("casts", 0),
+                "casts_wow": coin.get("casts_wow", 0),
                 "channels": coin.get("channels", 0),
-                "contract_address": coin.get("token_contract_address", None),
-                "deployed_days_ago": coin.get("deployed_days_ago", None),
-                "price": coin.get("median_price", 0),
+                "channels_wow": coin.get("channels_wow", 0),
+                "activity_level": coin.get("activity_level", 0),
+                "activity_wow": coin.get("activity_wow", 0),
+                "total_supply": coin.get("total_supply", 0),
                 "market_cap": coin.get("fdv", 0),
-                "liquidity": coin.get("liquidity_usd", 0),
-                "volume_week": coin.get("total_volume_week", 0),
+                "price": coin.get("median_price", 0.0),  # Use float for price
                 "pnl": {
                     "day": round(coin.get("day_pnl", 0) * 100, 2),  # Convert to percentage
                     "week": round(coin.get("week_pnl", 0) * 100, 2),
                     "month": round(coin.get("month_pnl", 0) * 100, 2)
                 },
-                "wow_changes": {
-                    "casters": coin.get("casters_wow", 0),
-                    "casts": coin.get("casts_wow", 0),
-                    "liquidity": coin.get("liquidity_wow", 0),
-                    "volume": coin.get("total_volume_wow", 0)
+                "liquidity_usd": coin.get("liquidity_usd", 0),
+                "liquidity_wow": coin.get("liquidity_wow", 0),
+                "rolling_one_months_trades": coin.get("rolling_one_months_trades", 0),
+                "transfers_one_month": coin.get("transfers_one_month", 0),
+                "volume": {
+                    "total_week": coin.get("total_volume_week", 0),
+                    "total_wow": coin.get("total_volume_wow", 0),
+                    "buy_week": coin.get("buy_volume_week", 0),
+                    "buy_wow": coin.get("buy_volume_wow", 0),
+                    "sell_week": coin.get("sell_volume_week", 0),
+                    "sell_wow": coin.get("sell_volume_wow", 0)
                 }
             }
             formatted_coins.append(formatted_coin)
+        
+        # Check max values for debugging
+        if rows:
+            max_social_score = max(row.get("social_score", 0) for row in rows)
+            max_liquidity_usd = max(row.get("liquidity_usd", 0) for row in rows)
+            max_median_price = max(row.get("median_price", 0) for row in rows)
+            print(f"Maximum social_score in response: {max_social_score}")
+            print(f"Maximum liquidity_usd in response: {max_liquidity_usd}")
+            print(f"Maximum median_price in response: {max_median_price}")
         
         result = {
             "memecoins": formatted_coins,
@@ -559,20 +624,301 @@ def get_farcaster_memecoins(
             }
         }
         
-        result = result.get("memecoins", [])
+        result = result["memecoins"]    
         
         return result
         
-    except httpx.HTTPError as e:
+    except httpx.HTTPStatusError as e:
         error_msg = f"HTTP error fetching Farcaster memecoins: {str(e)}"
         print(error_msg)
-        return {"error": error_msg}
+        raise QueryExecutionError(error_msg)
     except Exception as e:
         error_msg = f"Error processing Farcaster memecoins: {str(e)}"
         print(error_msg)
-        return {"error": error_msg}
+        raise QueryExecutionError(error_msg)
 
 
+VALID_FARCASTER_USERS_COLUMNS = [
+    "fid_active_tier_name", "fid_active_tier", "fid_active_tier_last", "fid", "fname",
+    "account_age", "channels", "top_channels", "top_domains", "top_engagers",
+    "followers", "wow_followers", "casts", "wow_casts", "engagement", "wow_engage",
+    "total_transactions", "trading_volume_usd", "contracts_deployed",
+    "got_likes", "wow_likes", "got_recasts", "wow_recasts", "got_replies", "wow_replies",
+    "addresses"
+]
+    
+@mcp.tool()
+def get_farcaster_users(
+    limit: int = 5,
+    filter_clause: str = None,
+    sort_by: str = "followers desc",
+) -> Dict[str, Any]:
+    """
+    Retrieve trending user data on Farcaster from the Dune API
+    Args:
+        limit (int): Number of users to return, up to 100. Default is 5.
+        filter_clause (str): Filtering expression (e.g., "followers > 1000", "fid_active_tier = 1").
+        sort_by (str): Field to sort by (e.g., "followers desc", "fname asc").
+        include_raw_response (bool): If True, returns the raw API response. Default is False.
+
+    Returns:
+        Dict[str, Any]: Result containing Farcaster user information.
+
+    Raises:
+        QueryExecutionError: If an error occurs when calling the API or if parameters are invalid.
+
+    """
+    try:
+        # check limit
+        if limit < 1 or limit > 100:
+            raise QueryExecutionError("Limit must be between 1 and 100")
+        
+        # Validate sort_by
+        if sort_by:
+            sort_field = sort_by.split()[0] if " " in sort_by else sort_by
+            if sort_field not in VALID_FARCASTER_USERS_COLUMNS:
+                raise QueryExecutionError(f"Invalid sort_by field: {sort_field}. Must be one of {VALID_FARCASTER_USERS_COLUMNS}")
+        
+        # check filter_clause
+        if filter_clause:
+            used_columns = [col for col in VALID_FARCASTER_USERS_COLUMNS if col in filter_clause]
+            if not used_columns:
+                raise QueryExecutionError(f"Filter clause must reference valid columns: {VALID_FARCASTER_USERS_COLUMNS}")
+
+        url = f"{BASE_URL}/farcaster/trends/users"
+        params = {"limit": min(limit, 100)}
+        if filter_clause:
+            params["filters"] = filter_clause
+        if sort_by:
+            params["sort_by"] = sort_by
+        
+        print(f"Fetching users from: {url}")
+        print(f"With params: {params}")
+        
+        with httpx.Client(timeout=QUERY_TIMEOUT) as client:
+            response = client.get(url, headers=HEADERS, params=params)
+            response.raise_for_status()
+            data = response.json()
+        
+        # extract data from response
+        rows = data.get("result", {}).get("rows", [])
+        metadata = data.get("result", {}).get("metadata", {})
+        
+        # format results
+        formatted_users = []
+        for user in rows:
+            formatted_user = {
+                "fid_active_tier_name": user.get("fid_active_tier_name", None),
+                "fid_active_tier": user.get("fid_active_tier", 0),
+                "fid_active_tier_last": user.get("fid_active_tier_last", 0),
+                "fid": user.get("fid", 0),
+                "fname": user.get("fname", "Unknown"),
+                "account_age": user.get("account_age", 0),
+                "channels": user.get("channels", 0),
+                "top_channels": user.get("top_channels", []),
+                "top_domains": user.get("top_domains", []),
+                "top_engagers": user.get("top_engagers", []),
+                "followers": user.get("followers", 0),
+                "wow_followers": user.get("wow_followers", 0),
+                "casts": user.get("casts", 0),
+                "wow_casts": user.get("wow_casts", 0),
+                "engagement": user.get("engagement", 0),
+                "wow_engage": user.get("wow_engage", 0),
+                "total_transactions": user.get("total_transactions", 0),
+                "trading_volume_usd": user.get("trading_volume_usd", 0),
+                "contracts_deployed": user.get("contracts_deployed", 0),
+                "got_likes": user.get("got_likes", 0),
+                "wow_likes": user.get("wow_likes", 0),
+                "got_recasts": user.get("got_recasts", 0),
+                "wow_recasts": user.get("wow_recasts", 0),
+                "got_replies": user.get("got_replies", 0),
+                "wow_replies": user.get("wow_replies", 0),
+                "addresses": user.get("addresses", [])
+            }
+            formatted_users.append(formatted_user)
+        
+        result = {
+            "users": formatted_users,
+            "count": len(formatted_users),
+            "metadata": {
+                "total_count": metadata.get("total_row_count", 0),
+                "columns": metadata.get("column_names", [])
+            },
+            "pagination": {
+                "next_offset": data.get("next_offset"),
+                "next_uri": data.get("next_uri")
+            }
+        }
+        
+        result = result["users"]    
+        
+        return result
+        
+    except httpx.HTTPStatusError as e:
+        error_msg = f"HTTP error fetching Farcaster users: {str(e)}"
+        print(error_msg)
+        raise QueryExecutionError(error_msg)
+    except Exception as e:
+        error_msg = f"Error processing Farcaster users: {str(e)}"
+        print(error_msg)
+        raise QueryExecutionError(error_msg)
+
+        
+# List of valid columns
+VALID_FARCASTER_CHANNELS_COLUMNS = [
+    "channel_tier_name", "channel_tier", "channel_tier_last", "channel", "channel_age",
+    "influential_casters", "top_domains", "top_casters", "casters", "wow_cast",
+    "got_casts", "engagement", "wow_engage", "onchain_experts", "trading_experts",
+    "contract_experts", "active_npc", "wow_npc", "active_user", "wow_active_user",
+    "active_star", "wow_star", "active_influencer", "wow_influencer", "active_vip",
+    "wow_vip", "got_replies", "wow_reply", "got_likes", "wow_likes", "got_recasts",
+    "wow_recasts"
+]
+        
+@mcp.tool()
+def get_farcaster_channels(
+    limit: int = 5,
+    filter_clause: str = None,
+    sort_by: str = "got_casts desc",
+) -> Dict[str, Any]:
+    """
+    Fetch trending channel data from the Farcaster Dune API.
+    
+    Args:
+        limit (int): Number of channels to retrieve, max 100. Defaults to 5.
+        filter_clause (str): Filter expression (e.g., "got_casts > 1000", "active_user > 1000").
+        sort_by (str): Field to sort results (e.g., "got_casts desc", "channel asc").
+        include_raw_response (bool): If True, includes raw API response. Defaults to False.
+        
+    Returns:
+        Dict[str, Any]: Structured result with Farcaster channel information.
+        
+    Raises:
+        QueryExecutionError: If there’s an error during API call or invalid parameters.
+    """
+    try:
+        # Validate limit
+        if limit < 1 or limit > 100:
+            raise QueryExecutionError("Limit must be between 1 and 100")
+        
+        # Validate sort_by
+        if sort_by:
+            sort_field = sort_by.split()[0] if " " in sort_by else sort_by
+            if sort_field not in VALID_FARCASTER_CHANNELS_COLUMNS:
+                raise QueryExecutionError(f"Invalid sort_by field: {sort_field}. Must be one of {VALID_FARCASTER_CHANNELS_COLUMNS}")
+        
+        # Validate filter_clause
+        if filter_clause:
+            used_columns = [col for col in VALID_FARCASTER_CHANNELS_COLUMNS if col in filter_clause]
+            if not used_columns:
+                raise QueryExecutionError(f"Filter clause must reference valid columns: {VALID_FARCASTER_CHANNELS_COLUMNS}")
+
+        url = f"{BASE_URL}/farcaster/trends/channels"
+        params = {"limit": min(limit, 100)}
+        if filter_clause:
+            params["filters"] = filter_clause  # Use "filters" as per API
+        if sort_by:
+            params["sort_by"] = sort_by  # Use "sort_by" as per API
+        
+        print(f"Fetching channels from: {url}")
+        print(f"With params: {params}")
+        
+        with httpx.Client(timeout=QUERY_TIMEOUT) as client:
+            response = client.get(url, headers=HEADERS, params=params)
+            response.raise_for_status()
+            data = response.json()
+        
+        # Extract data from response
+        rows = data.get("result", {}).get("rows", [])
+        metadata = data.get("result", {}).get("metadata", {})
+        
+        # Check if filter is being respected (for numeric filters like got_casts or active_user)
+        if filter_clause and ">" in filter_clause:
+            try:
+                column, threshold = filter_clause.split(">")
+                column = column.strip()
+                threshold = int(threshold.strip())
+                if column in VALID_FARCASTER_CHANNELS_COLUMNS:
+                    for row in rows:
+                        value = row.get(column, 0)
+                        if value <= threshold:
+                            print(f"Warning: Found {column}={value} which does not satisfy filter '{filter_clause}'")
+            except (IndexError, ValueError):
+                print("Warning: Could not parse filter threshold for validation")
+        
+        # Format results
+        formatted_channels = []
+        for channel in rows:
+            formatted_channel = {
+                "channel_tier_name": channel.get("channel_tier_name", None),
+                "channel_tier": channel.get("channel_tier", 0),
+                "channel_tier_last": channel.get("channel_tier_last", 0),
+                "channel": channel.get("channel", "Unknown"),
+                "channel_age": channel.get("channel_age", 0),
+                "influential_casters": channel.get("influential_casters", []),
+                "top_domains": channel.get("top_domains", []),
+                "top_casters": channel.get("top_casters", []),
+                "casters": channel.get("casters", 0),
+                "wow_cast": channel.get("wow_cast", 0),
+                "got_casts": channel.get("got_casts", 0),
+                "engagement": channel.get("engagement", 0),
+                "wow_engage": channel.get("wow_engage", 0),
+                "onchain_experts": channel.get("onchain_experts", 0),
+                "trading_experts": channel.get("trading_experts", 0),
+                "contract_experts": channel.get("contract_experts", 0),
+                "active_npc": channel.get("active_npc", 0),
+                "wow_npc": channel.get("wow_npc", 0),
+                "active_user": channel.get("active_user", 0),
+                "wow_active_user": channel.get("wow_active_user", 0),
+                "active_star": channel.get("active_star", 0),
+                "wow_star": channel.get("wow_star", 0),
+                "active_influencer": channel.get("active_influencer", 0),
+                "wow_influencer": channel.get("wow_influencer", 0),
+                "active_vip": channel.get("active_vip", 0),
+                "wow_vip": channel.get("wow_vip", 0),
+                "got_replies": channel.get("got_replies", 0),
+                "wow_reply": channel.get("wow_reply", 0),
+                "got_likes": channel.get("got_likes", 0),
+                "wow_likes": channel.get("wow_likes", 0),
+                "got_recasts": channel.get("got_recasts", 0),
+                "wow_recasts": channel.get("wow_recasts", 0)
+            }
+            formatted_channels.append(formatted_channel)
+        
+        # Check max values for debugging
+        if rows:
+            max_got_casts = max(row.get("got_casts", 0) for row in rows)
+            max_active_user = max(row.get("active_user", 0) for row in rows)
+            # print(f"Maximum got_casts in response: {max_got_casts}")
+            # print(f"Maximum active_user in response: {max_active_user}")
+        
+        result = {
+            "channels": formatted_channels,
+            "count": len(formatted_channels),
+            "metadata": {
+                "total_count": metadata.get("total_row_count", 0),
+                "columns": metadata.get("column_names", [])
+            },
+            "pagination": {
+                "next_offset": data.get("next_offset"),
+                "next_uri": data.get("next_uri")
+            }
+        }
+        
+        result = result['channels']
+        
+        return result
+        
+    except httpx.HTTPStatusError as e:
+        error_msg = f"HTTP error fetching Farcaster channels: {str(e)}"
+        print(error_msg)
+        raise QueryExecutionError(error_msg)
+    except Exception as e:
+        error_msg = f"Error processing Farcaster channels: {str(e)}"
+        print(error_msg)
+        raise QueryExecutionError(error_msg)
+    
+    
 def main():
     """
     Main entry point for the Dune Agent application.

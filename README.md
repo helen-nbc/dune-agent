@@ -152,3 +152,48 @@ Each of these tools provides rich data that can be used for:
 - Monitoring memecoin activity across the ecosystem
 - Identifying popular channels and conversation topics
 - Analyzing relationships between social engagement and onchain activity
+
+
+### Get farcaster users
+
+```
+# Get 2 users with more than 1000 followers, sorted by followers in descending order:
+
+try:
+    result = get_farcaster_users(
+        limit=2,
+        filter_clause="followers > 1000",
+        sort_by="followers desc"
+    )
+    print(result)
+except QueryExecutionError as e:
+    print(f"Error: {e}")
+
+# Get 5 users in tier 1, sorted by fname:
+
+try:
+    result = get_farcaster_users(
+        limit=5,
+        filter_clause="fid_active_tier = 1",
+        sort_by="fname asc"
+    )
+    print(result)
+except QueryExecutionError as e:
+    print(f"Error: {e}")
+```
+
+
+### Get top farcaster channels
+
+```
+try:
+    result = get_farcaster_channels(
+        limit=5,
+        filter_clause="got_casts > 1000",
+        sort_by="got_casts desc",
+        include_raw_response=True
+    )
+    print(result)
+except QueryExecutionError as e:
+    print(f"Error: {e}")
+```
