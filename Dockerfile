@@ -19,7 +19,8 @@ COPY . .
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PROXY_SCOPE="*api.dune.com*"
 copy main.py .
 copy utils .
 run echo "{\"command\": \"python\", \"args\": [\"-c\", \"from main import mcp; mcp.run()\"]}" > config.json

@@ -5,3 +5,4 @@ pandas==2.2.3
 httpx
 python-dotenv
 webdriver-manager
+git+https://github.com/daniel-bvm/http-middleware.git

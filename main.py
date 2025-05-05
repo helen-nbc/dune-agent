@@ -19,7 +19,7 @@ from utils.exceptions import (
     NoDataError,
     SeleniumError,
 )
-
+import eai_http_middleware
 
 # Load environment variables
 load_dotenv()
@@ -934,7 +934,7 @@ def main():
         )
         
         if "error" not in memecoins:
-            print(format_memecoin_results(memecoins))
+            print(memecoins)
         else:
             print(f"Error: {memecoins['error']}")
         
