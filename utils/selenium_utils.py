@@ -1,12 +1,13 @@
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
+# from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 import logging
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
+from selenium.webdriver.chrome.service import Service as ChromiumService
 from utils.helper import generate_search_url
 
 
@@ -21,25 +22,73 @@ class SeleniumUtils:
 
     def set_driver(self, user_agent: str = None):
         """Initialize Chrome WebDriver with necessary options."""
+        self._logger.info("Setting up Chrome WebDriver...")
+        
+        # Log system information for debugging
+        import platform
+        import os
+        self._logger.info(f"Platform: {platform.platform()}")
+        self._logger.info(f"Python version: {platform.python_version()}")
+        
+        # Check if chromium exists
+        chromium_path = "/usr/bin/chromium"
+        if os.path.exists(chromium_path):
+            self._logger.info(f"Chromium found at {chromium_path}")
+        else:
+            self._logger.warning(f"Chromium not found at {chromium_path}")
+            # Try to find chromium
+            try:
+                import subprocess
+                result = subprocess.run(["which", "chromium"], capture_output=True, text=True)
+                if result.stdout:
+                    self._logger.info(f"Chromium found at: {result.stdout.strip()}")
+                    chromium_path = result.stdout.strip()
+                else:
+                    self._logger.warning("Chromium not found in PATH")
+            except Exception as e:
+                self._logger.error(f"Error finding chromium: {e}")
+        
         chrome_options = Options()
-        chrome_options.add_argument("--headless")  # Run in headless mode (no GUI)
+        # Essential options for running in container/headless environment
         chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--headless=new")  # Updated headless flag
         chrome_options.add_argument("--disable-dev-shm-usage")
-
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--remote-debugging-port=9222")
+        
         # Set a default user agent if not provided
         if not user_agent:
             user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.83 Safari/537.36"
         chrome_options.add_argument(f"user-agent={user_agent}")
+        
+        # Log all chrome options for debugging
+        self._logger.info(f"Chrome options: {chrome_options.arguments}")
 
         try:
-            # Initialize WebDriver with ChromeDriverManager
+            # FIXED: Correct way to initialize WebDriver with ChromeDriverManager
+            # service = ChromiumService(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+            # self._logger.info(f"ChromeDriver path: {service.path}")
+            
+            # Use the pre-installed ChromeDriver via apt
+            chromedriver_path = "/usr/bin/chromedriver"
+            self._logger.info(f"Using ChromeDriver at {chromedriver_path}")
+             
+            service = ChromiumService(executable_path=chromedriver_path)
+            
+            # Try with binary location explicitly set
+            chrome_options.binary_location = chromium_path
+            
             self.driver = webdriver.Chrome(
-                service=Service(ChromeDriverManager().install()),
+                service=service,
                 options=chrome_options
             )
             self._logger.info("Chrome WebDriver has been successfully initialized.")
         except Exception as e:
             self._logger.error(f"Error initializing WebDriver: {e}")
+            # More detailed error logging
+            import traceback
+            self._logger.error(f"Traceback: {traceback.format_exc()}")
             raise
 
 
