@@ -120,13 +120,27 @@ class SeleniumUtils:
               return []
 
           # Get all the <a> tags inside the table
-          links = table.find_elements(By.TAG_NAME, "a")
+          # links = table.find_elements(By.TAG_NAME, "a")
+          # Get all the <a> tags inside the table contain title 
+          title_elements = table.find_elements(By.CLASS_NAME, "styles_title__54Ftn")
 
 
-          for link in links:
-              href = link.get_attribute("href")
-              if href and href.startswith("https://dune.com/queries/"):
-                  queries_ids.append(href)
+          for title_element in title_elements:
+                try:
+                    # Find the <a> tag that contains href
+                    parent_link = title_element.find_element(By.XPATH, "./ancestor::a")
+                    href = parent_link.get_attribute("href")
+                    title = title_element.text if title_element else "Cannot find title"
+                    # Only add if href is valid and related to Dune
+                    if href and href.startswith("https://dune.com/queries"):
+                        href = int(href.split("queries/")[-1])
+                        queries_ids.append({"query_id": href, "title": title})
+                except StaleElementReferenceException:
+                    self._logger.warning("Stale element encountered, skipping.")
+                    continue
+                except Exception as e:
+                    self._logger.error(f"Error processing link: {e}")
+                    continue
 
           return queries_ids
 

@@ -27,10 +27,6 @@ load_dotenv()
 # Initialize FastMCP
 mcp = FastMCP()
 
-# Valid chain identifiers for the trending contracts API
-VALID_CHAINS = ["ethereum", "arbitrum", "optimism", "polygon", "base", "bnb", "avalanche"]
-
-
 
 # Validate API key
 # if not DUNE_API_KEY:
@@ -55,7 +51,7 @@ def say_hello(name: str) -> str:
     return f"Hello {name}!"
 
 @mcp.tool()
-def get_query_ids(query: str) -> List[int]:
+def get_query_ids(query: str) -> List:
     '''
     Get query IDs from Dune Analytics using Selenium.
     
@@ -72,7 +68,7 @@ def get_query_ids(query: str) -> List[int]:
     try:
         _data = selenium_utils.get_queries_ids(query)
         if _data:
-            _data = _data[0].split('/')[-1]
+            # _data = _data[0].split('/')[-1]
             return _data
         else:
             return None
@@ -188,9 +184,13 @@ def get_latest_result_by_query_id(
     except Exception as e:
         raise QueryExecutionError(f"Error processing query results: {str(e)}")
 
-# trending contracts
+# trending EVM contracts
+
+# Valid chain identifiers for the trending EVM contracts API
+VALID_EVM_CONTRACT_CHAINS = ["abstract", "apechain", "arbitrum", "avalanche_c", "b3", "base", "blast", "bnb", "bob", "celo", "corn", "degen", "ethereum", "fantom", "flare", "gnosis", "ink", "kaia", "linea", "mantle", "nova", "opbnb", "optimism", "polygon", "ronin", "scroll", "sei", "sepolia", "shape", "sonic", "sophon", "unichain", "viction", "worldchain", "zkevm", "zksync", "zora"]
+
 @mcp.tool()
-def get_trending_contracts(
+def get_trending_EVM_contracts(
     chain: str,
     top_n: int = 10,
     sort_by: str = "usd_value_received DESC",
@@ -215,18 +215,19 @@ def get_trending_contracts(
         QueryExecutionError: If there is an error executing the query
         ValueError: If an invalid chain is provided
     """
-    if chain.lower() not in VALID_CHAINS:
-        valid_chains_str = ", ".join(VALID_CHAINS)
-        raise ValueError(f"Invalid chain: {chain}. Valid chains are: {valid_chains_str}")
+    if chain.lower() not in VALID_EVM_CONTRACT_CHAINS:
+        valid_evm_chains_str = ", ".join(VALID_EVM_CONTRACT_CHAINS)
+        raise ValueError(f"Invalid chain: {chain}. Valid chains are: {valid_evm_chains_str}")
     
     try:
-        url = f"{BASE_URL}/v1/trends/evm/contracts/{chain.lower()}"
+        url = f"{BASE_URL}/trends/evm/contracts/{chain.lower()}"
         with httpx.Client(timeout=QUERY_TIMEOUT) as client:
             response = client.get(url, headers=HEADERS)
             response.raise_for_status()
             data = response.json()
         
         result_data = data.get("result", {}).get("rows", [])
+
         
         if not result_data:
             return []
@@ -262,210 +263,6 @@ def get_trending_contracts(
         raise QueryExecutionError(f"HTTP error fetching trending contracts: {str(e)}")
     except Exception as e:
         raise QueryExecutionError(f"Error processing trending contracts: {str(e)}")
-
-@mcp.tool()
-def analyze_trending_contracts(
-    chain: str,
-    analysis_type: str = "token_distribution",
-    time_period: int = 30
-) -> Dict[str, Any]:
-    """
-    Analyze trending contracts on a specific EVM chain and provide insights.
-    
-    Args:
-        chain (str): The blockchain to analyze trending contracts for (e.g., ethereum, arbitrum)
-        analysis_type (str): Type of analysis to perform:
-            - "token_distribution": Distribution of token standards (ERC20, ERC721, etc.)
-            - "age_distribution": Distribution of contract deployment ages
-            - "value_by_age": Value received vs contract age correlation
-        time_period (int): Number of days to consider for the analysis. Defaults to 30.
-        
-    Returns:
-        Dict[str, Any]: Analysis results with statistics and insights
-        
-    Raises:
-        QueryExecutionError: If there is an error executing the query
-        ValueError: If an invalid analysis type is provided
-    """
-    valid_analysis_types = ["token_distribution", "age_distribution", "value_by_age"]
-    if analysis_type not in valid_analysis_types:
-        raise ValueError(f"Invalid analysis type: {analysis_type}. Valid types are: {', '.join(valid_analysis_types)}")
-    
-    # Get all trending contracts for the analysis
-    contracts = get_trending_contracts(chain, top_n=100)
-    
-    if not contracts:
-        return {"error": "No contracts found for analysis"}
-    
-    result = {
-        "chain": chain,
-        "contracts_analyzed": len(contracts),
-        "analysis_type": analysis_type,
-        "time_period_days": time_period,
-        "generated_at": datetime.utcnow().isoformat()
-    }
-    
-    if analysis_type == "token_distribution":
-        # Analyze token standard distribution
-        token_counts = {}
-        for contract in contracts:
-            token_standard = contract.get("token_standard", "OTHER")
-            if not token_standard:
-                token_standard = "OTHER"
-            token_counts[token_standard] = token_counts.get(token_standard, 0) + 1
-        
-        total = len(contracts)
-        token_distribution = {
-            standard: {
-                "count": count,
-                "percentage": round((count / total) * 100, 2)
-            }
-            for standard, count in token_counts.items()
-        }
-        
-        result["token_distribution"] = token_distribution
-        
-    elif analysis_type == "age_distribution":
-        # Analyze contract age distribution
-        age_buckets = {
-            "0-7 days": 0,
-            "8-30 days": 0,
-            "31-90 days": 0,
-            "91-180 days": 0,
-            "181-365 days": 0,
-            "1+ year": 0
-        }
-        
-        for contract in contracts:
-            days_ago = contract.get("deployed_days_ago", 0)
-            if days_ago <= 7:
-                age_buckets["0-7 days"] += 1
-            elif days_ago <= 30:
-                age_buckets["8-30 days"] += 1
-            elif days_ago <= 90:
-                age_buckets["31-90 days"] += 1
-            elif days_ago <= 180:
-                age_buckets["91-180 days"] += 1
-            elif days_ago <= 365:
-                age_buckets["181-365 days"] += 1
-            else:
-                age_buckets["1+ year"] += 1
-        
-        total = len(contracts)
-        age_distribution = {
-            bucket: {
-                "count": count,
-                "percentage": round((count / total) * 100, 2)
-            }
-            for bucket, count in age_buckets.items()
-        }
-        
-        result["age_distribution"] = age_distribution
-        
-    elif analysis_type == "value_by_age":
-        # Analyze value received vs contract age
-        age_value_buckets = {
-            "0-7 days": {"contracts": 0, "total_value": 0, "avg_value": 0},
-            "8-30 days": {"contracts": 0, "total_value": 0, "avg_value": 0},
-            "31-90 days": {"contracts": 0, "total_value": 0, "avg_value": 0},
-            "91-180 days": {"contracts": 0, "total_value": 0, "avg_value": 0},
-            "181-365 days": {"contracts": 0, "total_value": 0, "avg_value": 0},
-            "1+ year": {"contracts": 0, "total_value": 0, "avg_value": 0}
-        }
-        
-        for contract in contracts:
-            days_ago = contract.get("deployed_days_ago", 0)
-            value = contract.get("usd_value_received", 0)
-            
-            bucket_key = ""
-            if days_ago <= 7:
-                bucket_key = "0-7 days"
-            elif days_ago <= 30:
-                bucket_key = "8-30 days"
-            elif days_ago <= 90:
-                bucket_key = "31-90 days"
-            elif days_ago <= 180:
-                bucket_key = "91-180 days"
-            elif days_ago <= 365:
-                bucket_key = "181-365 days"
-            else:
-                bucket_key = "1+ year"
-            
-            age_value_buckets[bucket_key]["contracts"] += 1
-            age_value_buckets[bucket_key]["total_value"] += value
-        
-        # Calculate averages
-        for bucket in age_value_buckets:
-            if age_value_buckets[bucket]["contracts"] > 0:
-                age_value_buckets[bucket]["avg_value"] = round(
-                    age_value_buckets[bucket]["total_value"] / age_value_buckets[bucket]["contracts"], 2
-                )
-        
-        result["value_by_age"] = age_value_buckets
-    
-    return result
-
-@mcp.tool()
-def compare_trending_contracts(
-    chains: List[str],
-    metric: str = "usd_value_received",
-    top_n: int = 5
-) -> Dict[str, Any]:
-    """
-    Compare trending contracts across multiple EVM chains based on a specific metric.
-    
-    Args:
-        chains (List[str]): List of blockchains to compare (e.g., ["ethereum", "arbitrum", "optimism"])
-        metric (str): Metric to compare contracts by. Options:
-            - "usd_value_received": USD value received in last 30 days
-            - "transaction_calls": Number of transaction calls in last 30 days
-            - "unique_callers": Number of unique callers in last 30 days
-            - "contract_calls": Number of calls from other contracts in last 30 days
-        top_n (int): Number of top contracts to retrieve for each chain. Defaults to 5.
-        
-    Returns:
-        Dict[str, Any]: Comparison results with top contracts for each chain
-        
-    Raises:
-        QueryExecutionError: If there is an error executing the query
-        ValueError: If an invalid chain or metric is provided
-    """
-    valid_metrics = ["usd_value_received", "transaction_calls", "unique_callers", "contract_calls"]
-    if metric not in valid_metrics:
-        raise ValueError(f"Invalid metric: {metric}. Valid metrics are: {', '.join(valid_metrics)}")
-    
-    for chain in chains:
-        if chain.lower() not in VALID_CHAINS:
-            valid_chains_str = ", ".join(VALID_CHAINS)
-            raise ValueError(f"Invalid chain: {chain}. Valid chains are: {valid_chains_str}")
-    
-    result = {
-        "metric": metric,
-        "top_n": top_n,
-        "chains_compared": len(chains),
-        "generated_at": datetime.utcnow().isoformat(),
-        "comparison": {}
-    }
-    
-    for chain in chains:
-        # Get top trending contracts for this chain sorted by the specified metric
-        top_contracts = get_trending_contracts(chain, top_n=top_n, sort_by=f"{metric} DESC")
-        
-        # Extract relevant data for comparison
-        chain_data = []
-        for contract in top_contracts:
-            chain_data.append({
-                "contract_address": contract.get("contract_address"),
-                "contract_project": contract.get("contract_project"),
-                "contract_name": contract.get("contract_name"),
-                "deployed_days_ago": contract.get("deployed_days_ago"),
-                "token_standard": contract.get("token_standard"),
-                metric: contract.get(metric)
-            })
-        
-        result["comparison"][chain] = chain_data
-    
-    return result
 
 # memecoins
 
@@ -965,6 +762,25 @@ def main():
         
     except Exception as e:
         print(f"Error: {str(e)}")
+    # try:
+    #     # Test query execution with error handling
+    #     test_query_id = get_query_ids("Eternal AI Daily Inferences By Chain")
+    #     test_query_id = test_query_id[0]['query_id']
+    #     results = get_latest_result(test_query_id)
+    #     print(f"Got {len(results)} results")
+        
+    # except DuneAPIKeyError as e:
+    #     print(f"API Key Error: {str(e)}")
+    # except QueryExecutionError as e:
+    #     print(f"Query Execution Error: {str(e)}")
+    # except QueryTimeoutError as e:
+    #     print(f"Query Timeout Error: {str(e)}")
+    # except NoDataError as e:
+    #     print(f"No Data Error: {str(e)}")
+    # except SeleniumError as e:
+    #     print(f"Selenium Error: {str(e)}")
+    # except Exception as e:
+    #     print(f"Unexpected Error: {str(e)}")
 
 if __name__ == "__main__":
     main()
